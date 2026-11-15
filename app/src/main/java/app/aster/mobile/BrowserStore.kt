@@ -86,4 +86,44 @@ class BrowserStore(context: Context, private val ephemeral: Boolean = false) {
         if (bookmarks.none { it.url == url && it.folder == folder }) bookmarks += Entry(UUID.randomUUID().toString(), url, title.take(300), System.currentTimeMillis(), folder.take(100))
         save()
     }
+
+    /**
+     * Password persistence: sealed blobs only. Plaintext never enters this
+     * file — PasswordStore keeps only Keystore-encrypted byte arrays.
+     */
+    fun persistPasswords(records: List<PasswordStore.Record>) {
+        if (ephemeral) return
+        require(records.size <= 300) { "Credential limit exceeded" }
+        fun rows(items: List<PasswordStore.Record>) = JSONArray().apply {
+            items.forEach {
+                put(JSONObject().put("id", it.id).put("origin", it.origin).put("username", it.username)
+                    .put("title", it.title).put("notes", it.notes).put("created", it.dateCreated).put("updated", it.dateUpdated)
+                    .put("sealed", android.util.Base64.encodeToString(it.sealed ?: ByteArray(0), android.util.Base64.NO_WRAP)))
+            }
+        }
+        val passwordFile = AtomicFile(File(file.baseFile.parentFile, "passwords.json"))
+        val data = JSONObject().put("version", 1).put("records", rows(records))
+        var stream: java.io.FileOutputStream? = null
+        try { stream = passwordFile.startWrite(); stream.write(data.toString().toByteArray()); passwordFile.finishWrite(stream) }
+        catch (e: Exception) { if (stream != null) passwordFile.failWrite(stream); throw e }
+    }
+
+    fun loadPasswords(): List<PasswordStore.Record> {
+        if (ephemeral) return emptyList()
+        val passwordFile = File(file.baseFile.parentFile, "passwords.json")
+        if (!passwordFile.exists()) return emptyList()
+        require(passwordFile.length() <= 2 * 1024 * 1024) { "Password vault too large" }
+        return try {
+            val data = JSONObject(passwordFile.readText())
+            val arr = data.optJSONArray("records") ?: return emptyList()
+            (0 until minOf(300, arr.length())).mapNotNull { i ->
+                val o = arr.getJSONObject(i)
+                val sealed = android.util.Base64.decode(o.optString("sealed", ""), android.util.Base64.NO_WRAP)
+                if (sealed.isEmpty()) return@mapNotNull null
+                PasswordStore.Record(o.getString("id"), PasswordStore.originOf(o.getString("origin")) ?: return@mapNotNull null,
+                    o.optString("username").take(200), o.optString("title").take(200), o.optString("notes").take(2000),
+                    o.optLong("created"), o.optLong("updated"), sealed)
+            }
+        } catch (_: Exception) { emptyList() }
+    }
 }
