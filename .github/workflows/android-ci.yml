@@ -64,7 +64,17 @@ jobs:
           gradle-version: 8.11.1
       - id: has_secrets
         run: |
-          if [ -n "${{ secrets.ANDROID_KEYSTORE_B64 }}" ]; then echo "available=true" >> "$GITHUB_OUTPUT"; else echo "available=false" >> "$GITHUB_OUTPUT"; echo "Signing secrets not configured; skipping signed release (no fabrication)." >> "$GITHUB_STEP_SUMMARY"; fi
+          missing=""
+          for name in ANDROID_KEYSTORE_B64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${{ secrets.$name }}" ]; then missing="$missing $name"; fi
+          done
+          if [ -z "$missing" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Signing incomplete — missing secrets:$missing" >> "$GITHUB_STEP_SUMMARY"
+            echo "Configure all four in Settings → Secrets and variables → Actions. No signed release is fabricated without them." >> "$GITHUB_STEP_SUMMARY"
+          fi
       - name: Decode keystore
         if: steps.has_secrets.outputs.available == 'true'
         run: |
